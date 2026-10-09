@@ -1,0 +1,182 @@
+{{- range $component := list "api" "worker" }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-enterprise-{{ $component }}
+  labels:
+    {{- include "oce.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "oce.selector" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $component }}
+  template:
+    metadata:
+      labels:
+        {{- include "oce.selector" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $component }}
+    spec:
+      serviceAccountName: openclaw-enterprise-{{ $component }}
+      securityContext:
+        {{- include "oce.podSecurity" $ | nindent 8 }}
+      volumes:
+        - name: installation
+          secret:
+            secretName: openclaw-enterprise-installation
+        - {name: temporary, emptyDir: {sizeLimit: 256Mi}}
+        {{- if eq $component "worker" }}
+        - {name: readiness, emptyDir: {sizeLimit: 1Mi}}
+        {{- end }}
+      containers:
+        - name: {{ $component }}
+          image: {{ $.Values.images.controller | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["apps/controller/src/{{ ternary "server" "worker" (eq $component "api") }}.mjs"]
+          securityContext:
+            {{- include "oce.containerSecurity" $ | nindent 12 }}
+          resources:
+            {{- toYaml $.Values.resources.controller | nindent 12 }}
+          env:
+            - {name: NODE_ENV, value: production}
+            - {name: OCC_CONFIG_PATH, value: /etc/openclaw/installation/installation.yaml}
+            - name: OCC_DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: openclaw-enterprise-database, key: application-url}
+            {{- if eq $component "api" }}
+            - name: OCC_HOST
+              valueFrom:
+                fieldRef: {fieldPath: status.podIP}
+            - {name: OCC_PORT, value: "8080"}
+            - name: OCC_AUTH_SECRET
+              valueFrom:
+                secretKeyRef: {name: openclaw-enterprise-auth, key: secret}
+            - name: OCC_AUTH_BASE_URL
+              valueFrom:
+                configMapKeyRef: {name: openclaw-enterprise-endpoint, key: base-url}
+            - {name: OCC_AGENT_NATIVE_ADMIN_ENABLED, value: "false"}
+            {{- else }}
+            - {name: OCC_WORKER_READINESS_PATH, value: /run/openclaw-worker/ready}
+            - {name: OCC_WORKER_POLL_INTERVAL_MS, value: {{ $.Values.worker.pollIntervalMs | quote }}}
+            - {name: OCC_WORKER_LEASE_DURATION_MS, value: {{ $.Values.worker.leaseDurationMs | quote }}}
+            - {name: OCC_WORKER_MAX_ATTEMPTS, value: {{ $.Values.worker.maxAttempts | quote }}}
+            - {name: OCC_WORKER_CONVERGENCE_TIMEOUT_MS, value: {{ $.Values.worker.convergenceTimeoutMs | quote }}}
+            {{- end }}
+          volumeMounts:
+            - {name: installation, mountPath: /etc/openclaw/installation, readOnly: true}
+            - {name: temporary, mountPath: /tmp}
+            {{- if eq $component "worker" }}
+            - {name: readiness, mountPath: /run/openclaw-worker}
+            {{- end }}
+          {{- if eq $component "api" }}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          {{- else }}
+          readinessProbe:
+            exec:
+              command: ["node", "scripts/production-healthcheck.mjs", "worker", "ready"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["node", "scripts/production-healthcheck.mjs", "worker"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          {{- end }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw-enterprise-api
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "oce.selector" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-enterprise-tls-proxy
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tls-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "oce.selector" . | nindent 6 }}
+      app.kubernetes.io/component: tls-proxy
+  template:
+    metadata:
+      labels:
+        {{- include "oce.selector" . | nindent 8 }}
+        app.kubernetes.io/component: tls-proxy
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecret.name }}
+      securityContext:
+        {{- include "oce.podSecurity" . | nindent 8 }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: openclaw-enterprise-tls
+        - {name: temporary, emptyDir: {sizeLimit: 64Mi}}
+      containers:
+        - name: proxy
+          image: {{ .Values.images.controller | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/opt/oce/computenest/tls-proxy.mjs"]
+          env:
+            - {name: PORT, value: "8443"}
+            - {name: UPSTREAM_HOST, value: openclaw-enterprise-api}
+            - {name: UPSTREAM_PORT, value: "8080"}
+          securityContext:
+            {{- include "oce.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources.controller | nindent 12 }}
+          ports:
+            - {name: https, containerPort: 8443}
+          readinessProbe:
+            tcpSocket: {port: https}
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: {port: https}
+            initialDelaySeconds: 20
+          volumeMounts:
+            - {name: tls, mountPath: /etc/openclaw/tls, readOnly: true}
+            - {name: temporary, mountPath: /tmp}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw-enterprise
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "oce.selector" . | nindent 4 }}
+    app.kubernetes.io/component: tls-proxy
+  ports:
+    - {name: https, port: {{ .Values.service.port }}, targetPort: https, protocol: TCP}

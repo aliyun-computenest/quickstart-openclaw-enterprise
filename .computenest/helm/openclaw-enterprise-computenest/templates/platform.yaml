@@ -1,0 +1,207 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openclaw-enterprise-database
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  application-url: {{ include "oce.applicationDatabaseUrl" . | quote }}
+  migration-url: {{ include "oce.migrationDatabaseUrl" . | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openclaw-enterprise-postgres-bootstrap
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  init.sql: |
+    CREATE ROLE occ_migrator LOGIN PASSWORD '{{ .Values.migrationDatabasePassword }}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+    CREATE ROLE occ_app LOGIN PASSWORD '{{ .Values.applicationDatabasePassword }}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+    GRANT CREATE ON DATABASE openclaw_enterprise TO occ_migrator;
+    CREATE SCHEMA occ AUTHORIZATION occ_migrator;
+    CREATE SCHEMA drizzle AUTHORIZATION occ_migrator;
+    REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openclaw-enterprise-auth
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  secret: {{ .Values.authSecret | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openclaw-enterprise-installation
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  installation.yaml: |
+    occ:
+      cluster: {{ .Release.Name | quote }}
+    backend: []
+    presets:
+      includeDefaults: true
+    drivers:
+      plugin:
+        id: codex-plugin
+        configuration:
+          catalogSource: openai-curated
+      configuration:
+        id: config-kubernetes
+        configuration:
+          authentication:
+            mode: inCluster
+      iam:
+        id: native-iam
+        configuration: {}
+      compute:
+        id: compute-kubernetes
+        configuration:
+          authentication:
+            mode: inCluster
+          images:
+            gateway: {{ include "oce.runtimeImage" . | quote }}
+            agent: {{ include "oce.runtimeImage" . | quote }}
+            requireImmutableDigest: true
+          resources:
+            gateway:
+              {{- toYaml .Values.resources.runtime.gateway | nindent 14 }}
+            agent:
+              {{- toYaml .Values.resources.runtime.agent | nindent 14 }}
+            namespace:
+              quota:
+                pods: "10"
+              containerDefaults:
+                {{- toYaml .Values.resources.runtime.agent | nindent 16 }}
+          network:
+            dns:
+              namespace: kube-system
+              podLabels:
+                k8s-app: kube-dns
+            gatewayPort: 8080
+            gatewayTrustedProxyCidrs:
+              - 127.0.0.1/32
+            gatewayClients:
+              - namespace: {{ .Release.Namespace | quote }}
+                podLabels:
+                  app.kubernetes.io/name: openclaw-enterprise
+          servicePrincipalCredentials:
+            mode: projectedServiceAccountToken
+            audience: openclaw-enterprise
+            expirationSeconds: 900
+          runtime:
+            gatewayStorageClassName: {{ .Values.storage.className | quote }}
+            nativeOpenClawSessionCapacity: 8
+            transportSecretPrefix: openclaw-agent-transport
+      secret:
+        id: secret-kubernetes
+        configuration:
+          authentication:
+            mode: inCluster
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openclaw-enterprise-bootstrap
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: {{ .Values.storage.className | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.bootstrapSize }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw-enterprise-postgres
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "oce.selector" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: openclaw-enterprise-postgres
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+spec:
+  serviceName: openclaw-enterprise-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "oce.selector" . | nindent 6 }}
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels:
+        {{- include "oce.selector" . | nindent 8 }}
+        app.kubernetes.io/component: postgres
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecret.name }}
+      securityContext:
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      volumes:
+        - name: database-initialization
+          secret:
+            secretName: openclaw-enterprise-postgres-bootstrap
+            items:
+              - {key: init.sql, path: 00-occ-roles.sql}
+      containers:
+        - name: postgres
+          image: {{ .Values.images.postgres | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - {name: POSTGRES_DB, value: openclaw_enterprise}
+            - {name: POSTGRES_USER, value: postgres}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.databasePassword | quote }}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          resources:
+            {{- toYaml .Values.resources.postgres | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "openclaw_enterprise"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "openclaw_enterprise"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: database-initialization, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.storage.className | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.postgresSize }}

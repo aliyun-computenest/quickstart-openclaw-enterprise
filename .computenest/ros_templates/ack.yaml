@@ -1,0 +1,388 @@
+ROSTemplateFormatVersion: '2015-09-01'
+Description:
+  zh-cn: OpenClaw Enterprise ACK 集群版，支持新建 ACK Pro 集群或部署到已有 ACK 集群。
+  en: OpenClaw Enterprise on a new or existing ACK managed cluster.
+Parameters:
+  ClusterOption:
+    Type: String
+    Default: NewAck
+    AllowedValues: [NewAck, ExistingAck]
+    Label:
+      zh-cn: 集群方式
+      en: Cluster option
+  ExistingClusterId:
+    Type: String
+    Default: ''
+    AssociationProperty: ALIYUN::CS::Cluster::ClusterId
+    AssociationPropertyMetadata:
+      Visible:
+        Condition:
+          Fn::Equals: ['${ClusterOption}', ExistingAck]
+    Label:
+      zh-cn: 已有 ACK 集群
+      en: Existing ACK cluster
+  ZoneId:
+    Type: String
+    AssociationProperty: ALIYUN::ECS::Instance::ZoneId
+    AssociationPropertyMetadata:
+      Visible:
+        Condition:
+          Fn::Equals: ['${ClusterOption}', NewAck]
+    Label:
+      zh-cn: 可用区
+      en: Availability zone
+  WorkerInstanceType:
+    Type: String
+    Default: ecs.g8i.2xlarge
+    AssociationProperty: ALIYUN::ECS::Instance::InstanceType
+    AssociationPropertyMetadata:
+      ZoneId: ZoneId
+      Visible:
+        Condition:
+          Fn::Equals: ['${ClusterOption}', NewAck]
+    Label:
+      zh-cn: 工作节点规格
+      en: Worker instance type
+  WorkerCount:
+    Type: Number
+    Default: 3
+    MinValue: 2
+    MaxValue: 10
+    AssociationPropertyMetadata:
+      Visible:
+        Condition:
+          Fn::Equals: ['${ClusterOption}', NewAck]
+    Label:
+      zh-cn: 工作节点数量
+      en: Worker node count
+  LoginPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 30
+    AssociationProperty: ALIYUN::ECS::Instance::Password
+    AssociationPropertyMetadata:
+      Visible:
+        Condition:
+          Fn::Equals: ['${ClusterOption}', NewAck]
+    Label:
+      zh-cn: 节点登录密码
+      en: Node login password
+  AdminEmail:
+    Type: String
+    Default: admin@example.com
+    AllowedPattern: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    Label:
+      zh-cn: 初始管理员邮箱
+      en: Initial administrator email
+  DeploymentNamespace:
+    Type: String
+    Default: openclaw-enterprise
+    AllowedPattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+    MinLength: 1
+    MaxLength: 63
+    Label:
+      zh-cn: Kubernetes 命名空间
+      en: Kubernetes namespace
+  VpcCidr:
+    Type: String
+    Default: 192.168.0.0/16
+    AssociationPropertyMetadata:
+      Visible:
+        Condition:
+          Fn::Equals: ['${ClusterOption}', NewAck]
+    Label:
+      zh-cn: VPC 网段
+      en: VPC CIDR
+  VSwitchCidr:
+    Type: String
+    Default: 192.168.0.0/20
+    AssociationPropertyMetadata:
+      Visible:
+        Condition:
+          Fn::Equals: ['${ClusterOption}', NewAck]
+    Label:
+      zh-cn: 交换机网段
+      en: VSwitch CIDR
+Conditions:
+  CreateAck:
+    Fn::Equals:
+      - Ref: ClusterOption
+      - NewAck
+Resources:
+  DatabasePassword:
+    Type: ALIYUN::RandomString
+    Properties:
+      length: 32
+      character_classes:
+        - {class: lowercase, min: 8}
+        - {class: uppercase, min: 8}
+        - {class: digits, min: 8}
+  ApplicationDatabasePassword:
+    Type: ALIYUN::RandomString
+    Properties:
+      length: 32
+      character_classes:
+        - {class: lowercase, min: 8}
+        - {class: uppercase, min: 8}
+        - {class: digits, min: 8}
+  MigrationDatabasePassword:
+    Type: ALIYUN::RandomString
+    Properties:
+      length: 32
+      character_classes:
+        - {class: lowercase, min: 8}
+        - {class: uppercase, min: 8}
+        - {class: digits, min: 8}
+  AuthSecret:
+    Type: ALIYUN::RandomString
+    Properties:
+      length: 64
+      character_classes:
+        - {class: lowercase, min: 20}
+        - {class: uppercase, min: 20}
+        - {class: digits, min: 20}
+  Vpc:
+    Type: ALIYUN::ECS::VPC
+    Condition: CreateAck
+    Properties:
+      VpcName:
+        Ref: ALIYUN::StackName
+      CidrBlock:
+        Ref: VpcCidr
+  VSwitch:
+    Type: ALIYUN::ECS::VSwitch
+    Condition: CreateAck
+    Properties:
+      VpcId:
+        Ref: Vpc
+      ZoneId:
+        Ref: ZoneId
+      CidrBlock:
+        Ref: VSwitchCidr
+      VSwitchName:
+        Ref: ALIYUN::StackName
+  # 不自建安全组：ACK 会为托管集群自动创建并维护安全组（alicloud-cs-auto-created-security-group-<cid>），
+  # 内含 node join、flannel/Pod 网络、节点互通等必需规则。若改为传入自建的企业安全组（enterprise）
+  # 且不显式加规则，企业安全组默认不放行组内互通，会导致节点无法加入集群，
+  # ClusterNodePool 卡在 stageWaitNodesReady 并报 CollectErrMessageFailed.ClientNetworkBlocked。
+  # 与仓库已验证服务 quickstart-robot-solution 保持一致：集群与节点池均不传 SecurityGroupId。
+  ManagedKubernetesCluster:
+    Type: ALIYUN::CS::ManagedKubernetesCluster
+    Condition: CreateAck
+    Properties:
+      Name:
+        Ref: ALIYUN::StackName
+      ChargeType: PostPaid
+      VpcId:
+        Ref: Vpc
+      VSwitchIds:
+        - Ref: VSwitch
+      NumOfNodes: 0
+      KubernetesVersion: 1.35.7-aliyun.1
+      ClusterSpec: ack.pro.small
+      ContainerCidr: 172.20.0.0/16
+      ServiceCidr: 172.21.0.0/20
+      ZoneIds:
+        - Ref: ZoneId
+      SnatEntry: true
+      CloudMonitorFlags: true
+      Addons:
+        - {Name: flannel, Config: ''}
+        - {Name: csi-plugin}
+        - {Name: csi-provisioner}
+        - {Name: loongcollector, Config: '{"IngressDashboardEnabled":"true"}'}
+  WorkerNodePool:
+    Type: ALIYUN::CS::ClusterNodePool
+    Condition: CreateAck
+    Properties:
+      ClusterId:
+        Fn::GetAtt: [ManagedKubernetesCluster, ClusterId]
+      Count:
+        Ref: WorkerCount
+      NodePoolInfo:
+        Name: openclaw-workers
+      KubernetesConfig:
+        Runtime: containerd
+        RuntimeVersion: 2.1.9
+      ScalingGroup:
+        InstanceChargeType: PostPaid
+        VSwitchIds:
+          - Ref: VSwitch
+        ZoneIds:
+          - Ref: ZoneId
+        InstanceTypes:
+          - Ref: WorkerInstanceType
+        SystemDiskCategory: cloud_essd
+        SystemDiskPerformanceLevel: PL1
+        SystemDiskSize: 120
+        LoginPassword:
+          Ref: LoginPassword
+        ImageType: AliyunLinux3ContainerOptimized
+  OpenClawHelm:
+    Type: MODULE::ACS::ComputeNest::FluxOciHelmDeploy
+    Version: v1
+    # 竞态修复：新建集群时 Flux 安装必须等工作节点 Ready，否则 Flux 组件无节点可调度，
+    # 模块内置 300s WaitUntil 会超时。ExistingAck 模式下 WorkerNodePool 不创建，ROS 自动忽略此依赖。
+    DependsOn: WorkerNodePool
+    Properties:
+      ClusterId:
+        Fn::If:
+          - CreateAck
+          - Fn::GetAtt: [ManagedKubernetesCluster, ClusterId]
+          - Ref: ExistingClusterId
+      HelmChartUrl: '{{ computenest::helmchart::openclaw-enterprise-chart }}'
+      DockerConfigJson: '{{ computenest::helm::dockerconfigjson }}'
+      Namespace:
+        Ref: DeploymentNamespace
+      ReleaseName:
+        Ref: DeploymentNamespace
+      ChartValues:
+        images:
+          controller: '{{ computenest::acrimage::openclaw-enterprise-controller }}'
+          runtime: '{{ computenest::acrimage::openclaw-enterprise-runtime }}'
+          postgres: '{{ computenest::acrimage::openclaw-enterprise-postgres }}'
+        adminEmail:
+          Ref: AdminEmail
+        installationName: OpenClaw Enterprise on ComputeNest
+        databasePassword:
+          Fn::GetAtt: [DatabasePassword, value]
+        applicationDatabasePassword:
+          Fn::GetAtt: [ApplicationDatabasePassword, value]
+        migrationDatabasePassword:
+          Fn::GetAtt: [MigrationDatabasePassword, value]
+        authSecret:
+          Fn::GetAtt: [AuthSecret, value]
+        imagePullSecret:
+          name: computenest-acr
+          dockerConfigJson: '{{ computenest::acr::dockerconfigjson }}'
+        storage:
+          className: alicloud-disk-topology-alltype
+          postgresSize: 40Gi
+          bootstrapSize: 20Gi
+      WaitUntil:
+        - Kind: Deployment
+          Name: openclaw-enterprise-endpoint
+          Namespace:
+            Ref: DeploymentNamespace
+          JsonPath: $.status.availableReplicas
+          Operator: Equals
+          Value: '1'
+          ValueType: Json
+          FirstMatch: true
+          Timeout: 1200
+        - Kind: Deployment
+          Name: openclaw-enterprise-bootstrap
+          Namespace:
+            Ref: DeploymentNamespace
+          JsonPath: $.status.availableReplicas
+          Operator: Equals
+          Value: '1'
+          ValueType: Json
+          FirstMatch: true
+          Timeout: 1200
+        - Kind: Deployment
+          Name: openclaw-enterprise-api
+          Namespace:
+            Ref: DeploymentNamespace
+          JsonPath: $.status.availableReplicas
+          Operator: Equals
+          Value: '1'
+          ValueType: Json
+          FirstMatch: true
+          Timeout: 1200
+        - Kind: Deployment
+          Name: openclaw-enterprise-worker
+          Namespace:
+            Ref: DeploymentNamespace
+          JsonPath: $.status.availableReplicas
+          Operator: Equals
+          Value: '1'
+          ValueType: Json
+          FirstMatch: true
+          Timeout: 1200
+        - Kind: Deployment
+          Name: openclaw-enterprise-tls-proxy
+          Namespace:
+            Ref: DeploymentNamespace
+          JsonPath: $.status.availableReplicas
+          Operator: Equals
+          Value: '1'
+          ValueType: Json
+          FirstMatch: true
+          Timeout: 1200
+  EndpointData:
+    Type: DATASOURCE::CS::ClusterApplicationResources
+    DependsOn: OpenClawHelm
+    Properties:
+      ClusterId:
+        Fn::If:
+          - CreateAck
+          - Fn::GetAtt: [ManagedKubernetesCluster, ClusterId]
+          - Ref: ExistingClusterId
+      Namespace:
+        Ref: DeploymentNamespace
+      Kind: ConfigMap
+      Name: openclaw-enterprise-endpoint
+      JsonPath: $.data.base-url
+      FirstMatch: true
+  BootstrapPasswordData:
+    Type: DATASOURCE::CS::ClusterApplicationResources
+    DependsOn: OpenClawHelm
+    Properties:
+      ClusterId:
+        Fn::If:
+          - CreateAck
+          - Fn::GetAtt: [ManagedKubernetesCluster, ClusterId]
+          - Ref: ExistingClusterId
+      Namespace:
+        Ref: DeploymentNamespace
+      Kind: Secret
+      Name: openclaw-enterprise-bootstrap
+      JsonPath: $.data.admin-password
+      FirstMatch: true
+Outputs:
+  Endpoint:
+    Description:
+      zh-cn: 控制台访问地址（首次打开需确认自签名证书）
+      en: Console URL (accept the self-signed certificate on first visit)
+    Value:
+      Fn::GetAtt: [EndpointData, Response]
+  AdminEmail:
+    Description:
+      zh-cn: 初始管理员邮箱
+      en: Initial administrator email
+    Value:
+      Ref: AdminEmail
+  AdminPassword:
+    NoEcho: true
+    Description:
+      zh-cn: 初始管理员密码
+      en: Initial administrator password
+    Value:
+      Fn::Base64Decode:
+        Fn::GetAtt: [BootstrapPasswordData, Response]
+  ClusterId:
+    Description:
+      zh-cn: ACK 集群 ID
+      en: ACK cluster ID
+    Value:
+      Fn::If:
+        - CreateAck
+        - Fn::GetAtt: [ManagedKubernetesCluster, ClusterId]
+        - Ref: ExistingClusterId
+Metadata:
+  ALIYUN::ROS::Interface:
+    ParameterGroups:
+      - Parameters: [ClusterOption, ExistingClusterId]
+        Label:
+          zh-cn: 集群选择
+          en: Cluster selection
+      - Parameters: [ZoneId, WorkerInstanceType, WorkerCount, LoginPassword, VpcCidr, VSwitchCidr]
+        Label:
+          zh-cn: 新建集群配置
+          en: New cluster settings
+      - Parameters: [AdminEmail, DeploymentNamespace]
+        Label:
+          zh-cn: OpenClaw 配置
+          en: OpenClaw settings

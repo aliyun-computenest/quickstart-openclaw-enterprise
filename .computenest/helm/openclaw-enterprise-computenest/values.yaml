@@ -1,0 +1,47 @@
+images:
+  controller: ""
+  runtime: ""
+  runtimeDigest: "sha256:7a668e42508a6453c7f17071172c5314f64e0a87b6a1c202e5b73025b1fa65ff"
+  postgres: ""
+
+adminEmail: admin@example.com
+installationName: OpenClaw Enterprise on ComputeNest
+authSecret: change-me-to-at-least-32-characters
+databasePassword: change-me
+applicationDatabasePassword: change-me
+migrationDatabasePassword: change-me
+
+service:
+  type: LoadBalancer
+  annotations: {}
+  port: 443
+
+imagePullSecret:
+  name: computenest-acr
+  dockerConfigJson: ""
+
+storage:
+  className: alicloud-disk-topology-alltype
+  postgresSize: 40Gi
+  bootstrapSize: 20Gi
+
+resources:
+  controller:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}
+  postgres:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}
+  runtime:
+    gateway:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: "1", memory: 2Gi}
+    agent:
+      requests: {cpu: 250m, memory: 512Mi}
+      limits: {cpu: "2", memory: 4Gi}
+
+worker:
+  pollIntervalMs: 250
+  leaseDurationMs: 5000
+  maxAttempts: 5
+  convergenceTimeoutMs: 900000

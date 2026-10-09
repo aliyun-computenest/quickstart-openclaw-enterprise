@@ -1,0 +1,103 @@
+Service:
+  RegionId: cn-hongkong
+  DeployType: ros
+  DeployMetadata:
+    EstimateTime: 60
+    ServiceInstanceNameRule:
+      Prefix: OpenClawEnterprise-
+      UseDefaultValue: true
+    NetworkMetadata:
+      EnablePrivateVpcConnection: false
+      EnableReversePrivateVpcConnection: false
+    SupplierDeployMetadata:
+      DeployTimeout: 10800
+      AcrImageArtifactRelation:
+        '{{ computenest::acrimage::openclaw-enterprise-controller }}':
+          ArtifactId: ${Artifact.ControllerImage.ArtifactId}
+          ArtifactVersion: ${Artifact.ControllerImage.ArtifactVersion}
+        '{{ computenest::acrimage::openclaw-enterprise-runtime }}':
+          ArtifactId: ${Artifact.RuntimeImage.ArtifactId}
+          ArtifactVersion: ${Artifact.RuntimeImage.ArtifactVersion}
+        '{{ computenest::acrimage::openclaw-enterprise-postgres }}':
+          ArtifactId: ${Artifact.PostgresImage.ArtifactId}
+          ArtifactVersion: ${Artifact.PostgresImage.ArtifactVersion}
+      HelmChartArtifactRelation:
+        '{{ computenest::helmchart::openclaw-enterprise-chart }}':
+          ArtifactId: ${Artifact.HelmChart.ArtifactId}
+          ArtifactVersion: ${Artifact.HelmChart.ArtifactVersion}
+    TemplateConfigs:
+    - Name: ACK 集群版
+      Url: ros_templates/ack.yaml
+      AllowedRegions: [cn-hongkong, ap-southeast-1]
+      PredefinedParameters: []
+      DeployScene: ACK
+  OperationMetadata:
+    SupportBackup: false
+    PrometheusConfigMap:
+      ACK 集群版:
+        EnablePrometheus: false
+  ServiceType: private
+  ShareType: Public
+  ApprovalType: Manual
+  ServiceInfo:
+  - Locale: zh-CN
+    Name: OpenClaw Enterprise 社区版
+    ShortDescription: 一键部署 OpenClaw Enterprise 智能体管理平台，支持新建 ACK 托管 Pro 集群或复用已有 
+      ACK 集群。
+    Image: 
+      https://service-info-public.oss-cn-hangzhou.aliyuncs.com/1853370294850618/cn-hangzhou/service_logoa5fe342b49974770bf49.png
+    Softwares: []
+Artifact:
+  ControllerImage:
+    ArtifactType: AcrImage
+    ArtifactName: openclaw-enterprise-controller
+    Description: OpenClaw Enterprise controller image
+    ArtifactProperty:
+      RepoName: ${AcrImageBuilder.Controller.RepoName}
+      Tag: ${AcrImageBuilder.Controller.Tag}
+  RuntimeImage:
+    ArtifactType: AcrImage
+    ArtifactName: openclaw-enterprise-runtime
+    Description: OpenClaw Enterprise Agent runtime image
+    ArtifactProperty:
+      RepoName: ${AcrImageBuilder.Runtime.RepoName}
+      Tag: ${AcrImageBuilder.Runtime.Tag}
+  PostgresImage:
+    ArtifactType: AcrImage
+    ArtifactName: openclaw-enterprise-postgres
+    Description: PostgreSQL 18.6 runtime image
+    ArtifactProperty:
+      RepoName: ${AcrImageBuilder.Postgres.RepoName}
+      Tag: ${AcrImageBuilder.Postgres.Tag}
+  HelmChart:
+    ArtifactType: HelmChart
+    ArtifactName: openclaw-enterprise-helm-chart
+    Description: OpenClaw Enterprise ComputeNest Helm Chart
+    ArtifactProperty:
+      RepoName: ${HelmChartBuilder.OpenClawEnterprise.RepoName}
+      Tag: ${HelmChartBuilder.OpenClawEnterprise.Tag}
+AcrImageBuilder:
+  Controller:
+    DockerFilePath: .computenest/docker/Dockerfile.controller
+    RepoName: openclaw-enterprise-controller
+    Tag: a5cc0d7
+  Runtime:
+    DockerFilePath: .computenest/docker/Dockerfile.runtime
+    RepoName: openclaw-enterprise-runtime
+    Tag: a5cc0d7
+  Postgres:
+    BuildType: DockerRepo
+    # 固定到 linux/amd64 子 manifest 摘要（非多架构 list 摘要）。
+    # DockerRepo 类型仅做 pull+tag+push，不经过 build，因此不受 DOCKER_DEFAULT_PLATFORM 影响；
+    # 在 Apple Silicon(arm64) 构建机上用 list 摘要会拉到 arm64 子镜像并推到 ACR，
+    # 导致 amd64 的 ACK 节点上 postgres 容器报 "exec format error" 并 CrashLoopBackOff。
+    DockerRepoUrl: 
+      public.ecr.aws/docker/library/postgres@sha256:885953109528ad3dfc90362b1a6f50a78620b5315be19f187753d267e484dc5b
+    RepoName: openclaw-enterprise-postgres
+    Tag: 18.6
+HelmChartBuilder:
+  OpenClawEnterprise:
+    HelmChartPath: 
+      resources/artifact_resources/helm_chart/openclaw-enterprise-computenest-0.1.7.tgz
+    RepoName: openclaw-enterprise-computenest
+    Tag: 0.1.7

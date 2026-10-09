@@ -1,0 +1,223 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openclaw-enterprise-bootstrap-retry
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+data:
+  bootstrap-retry.mjs: |
+    import { spawn } from "node:child_process";
+    import { rm } from "node:fs/promises";
+    import { createRequire } from "node:module";
+
+    const require = createRequire("/app/apps/controller/package.json");
+    const { Pool } = require("pg");
+    const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+    function runBootstrap() {
+      return new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ["scripts/bootstrap-installation.mjs"], {
+          env: process.env,
+          stdio: "inherit",
+        });
+        child.once("error", reject);
+        child.once("exit", (code, signal) => resolve(code ?? (signal === null ? 1 : 128)));
+      });
+    }
+
+    async function removeIncompleteBootstrap() {
+      const pool = new Pool({ connectionString: process.env.OCC_DATABASE_URL });
+      try {
+        const installation = await pool.query("SELECT id FROM occ.installation LIMIT 1");
+        if ((installation.rowCount ?? 0) !== 0) return false;
+        await pool.query("BEGIN");
+        await pool.query('DELETE FROM occ.apikey WHERE config_id = $1', ["occ-service"]);
+        await pool.query(
+          'DELETE FROM occ.account WHERE user_id IN (SELECT id FROM occ."user" WHERE lower(email) = lower($1))',
+          [process.env.OCC_BOOTSTRAP_ADMIN_EMAIL],
+        );
+        await pool.query('DELETE FROM occ."user" WHERE lower(email) = lower($1)', [
+          process.env.OCC_BOOTSTRAP_ADMIN_EMAIL,
+        ]);
+        await pool.query("COMMIT");
+        await rm(process.env.OCC_BOOTSTRAP_PASSWORD_FILE, { force: true });
+        await rm(process.env.OCC_BOOTSTRAP_SERVICE_KEY_FILE, { force: true });
+        return true;
+      } catch (error) {
+        await pool.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      } finally {
+        await pool.end();
+      }
+    }
+
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      const code = await runBootstrap();
+      if (code === 0) process.exit(0);
+      const recovered = await removeIncompleteBootstrap();
+      if (!recovered || attempt === 5) process.exit(code);
+      await sleep(attempt * 5000);
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-enterprise-endpoint
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+    app.kubernetes.io/component: endpoint
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      {{- include "oce.selector" . | nindent 6 }}
+      app.kubernetes.io/component: endpoint
+  template:
+    metadata:
+      labels:
+        {{- include "oce.selector" . | nindent 8 }}
+        app.kubernetes.io/component: endpoint
+    spec:
+      serviceAccountName: openclaw-enterprise-endpoint
+      securityContext:
+        {{- include "oce.podSecurity" . | nindent 8 }}
+      volumes:
+        - {name: temporary, emptyDir: {sizeLimit: 64Mi}}
+      containers:
+        - name: endpoint
+          image: {{ .Values.images.controller | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/opt/oce/computenest/platform-operator.mjs", "endpoint"]
+          env:
+            - {name: OCE_SERVICE_NAME, value: openclaw-enterprise}
+            - {name: OCE_ENDPOINT_CONFIGMAP, value: openclaw-enterprise-endpoint}
+            - {name: OCE_TLS_SECRET, value: openclaw-enterprise-tls}
+          securityContext:
+            {{- include "oce.containerSecurity" . | nindent 12 }}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "const fs=require('fs');const https=require('https');const t=fs.readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/token','utf8').trim();const ca=fs.readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/ca.crt');const ns=fs.readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/namespace','utf8').trim();const r=https.request({host:process.env.KUBERNETES_SERVICE_HOST,port:443,path:'/api/v1/namespaces/'+ns+'/configmaps/openclaw-enterprise-endpoint',ca,headers:{Authorization:'Bearer '+t}},x=>process.exit(x.statusCode===200?0:1));r.on('error',()=>process.exit(1));r.end();"
+            periodSeconds: 5
+          volumeMounts:
+            - {name: temporary, mountPath: /tmp}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-enterprise-bootstrap
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bootstrap
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      {{- include "oce.selector" . | nindent 6 }}
+      app.kubernetes.io/component: bootstrap
+  template:
+    metadata:
+      labels:
+        {{- include "oce.selector" . | nindent 8 }}
+        app.kubernetes.io/component: bootstrap
+    spec:
+      serviceAccountName: openclaw-enterprise-bootstrap
+      securityContext:
+        {{- include "oce.podSecurity" . | nindent 8 }}
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+        - name: bootstrap
+          persistentVolumeClaim: {claimName: openclaw-enterprise-bootstrap}
+        - name: bootstrap-retry
+          configMap:
+            name: openclaw-enterprise-bootstrap-retry
+            defaultMode: 0444
+        - {name: temporary, emptyDir: {sizeLimit: 256Mi}}
+      initContainers:
+        - name: prepare-bootstrap-volume
+          image: {{ .Values.images.controller | quote }}
+          command:
+            - node
+            - -e
+            - "const fs=require('node:fs');const root='/var/lib/openclaw/bootstrap';fs.chownSync(root,1000,1000);fs.chmodSync(root,0o700);"
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
+          volumeMounts:
+            - {name: bootstrap, mountPath: /var/lib/openclaw/bootstrap}
+        - name: wait-for-database
+          image: {{ .Values.images.controller | quote }}
+          command:
+            - node
+            - -e
+            - "const net=require('net');let n=0;function c(){const s=net.connect(5432,'openclaw-enterprise-postgres',()=>process.exit(0));s.on('error',()=>{s.destroy();if(++n>120)process.exit(1);setTimeout(c,5000)});}c();"
+          securityContext:
+            {{- include "oce.containerSecurity" . | nindent 12 }}
+        - name: migration
+          image: {{ .Values.images.controller | quote }}
+          args: ["scripts/migrate-production.mjs"]
+          env:
+            - {name: NODE_ENV, value: production}
+            - name: OCC_MIGRATION_DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: openclaw-enterprise-database, key: migration-url}
+          securityContext:
+            {{- include "oce.containerSecurity" . | nindent 12 }}
+        - name: bootstrap
+          image: {{ .Values.images.controller | quote }}
+          command: ["node", "/opt/oce/bootstrap-retry.mjs"]
+          env:
+            - {name: NODE_ENV, value: production}
+            - name: OCC_DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: openclaw-enterprise-database, key: application-url}
+            - name: OCC_AUTH_SECRET
+              valueFrom:
+                secretKeyRef: {name: openclaw-enterprise-auth, key: secret}
+            - name: OCC_AUTH_BASE_URL
+              valueFrom:
+                configMapKeyRef: {name: openclaw-enterprise-endpoint, key: base-url}
+            - {name: OCC_BOOTSTRAP_ADMIN_EMAIL, value: {{ .Values.adminEmail | quote }}}
+            - {name: OCC_BOOTSTRAP_PASSWORD_FILE, value: /var/lib/openclaw/bootstrap/initial-admin-password}
+            - {name: OCC_BOOTSTRAP_SERVICE_KEY_FILE, value: /var/lib/openclaw/bootstrap/initial-admin-service-key.json}
+            - {name: OCC_BOOTSTRAP_INSTALLATION_NAME, value: {{ .Values.installationName | quote }}}
+          securityContext:
+            {{- include "oce.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - {name: bootstrap, mountPath: /var/lib/openclaw/bootstrap}
+            - {name: bootstrap-retry, mountPath: /opt/oce/bootstrap-retry.mjs, subPath: bootstrap-retry.mjs, readOnly: true}
+            - {name: temporary, mountPath: /tmp}
+      containers:
+        - name: synchronize
+          image: {{ .Values.images.controller | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/opt/oce/computenest/platform-operator.mjs", "bootstrap"]
+          env:
+            - {name: OCE_BOOTSTRAP_PASSWORD_FILE, value: /var/lib/openclaw/bootstrap/initial-admin-password}
+            - {name: OCE_BOOTSTRAP_SECRET, value: openclaw-enterprise-bootstrap}
+            - {name: OCE_ADMIN_EMAIL, value: {{ .Values.adminEmail | quote }}}
+          securityContext:
+            {{- include "oce.containerSecurity" . | nindent 12 }}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          readinessProbe:
+            exec:
+              command: ["test", "-s", "/var/lib/openclaw/bootstrap/initial-admin-password"]
+            periodSeconds: 5
+          volumeMounts:
+            - {name: bootstrap, mountPath: /var/lib/openclaw/bootstrap, readOnly: true}
+            - {name: temporary, mountPath: /tmp}
