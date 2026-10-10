@@ -71,7 +71,7 @@ OpenClaw Enterprise（OCE）是一款开源、厂商中立的智能体（Agent�
 
 | 输出项 | 内容 |
 | --- | --- |
-| `Endpoint` | OCE 控制台 HTTPS 访问地址，形如 `https://openclaw-<ip>.sslip.io` |
+| `Endpoint` | OCE 控制台 HTTPS 访问地址，形如 `https://openclaw-<ip>.sslip.io/console` |
 | `AdminEmail` | 初始管理员邮箱 |
 | `AdminPassword` | 初始管理员密码（部署时自动生成） |
 | `ClusterId` | 实际使用的 ACK 集群 ID |
@@ -80,7 +80,7 @@ OpenClaw Enterprise（OCE）是一款开源、厂商中立的智能体（Agent�
 
 ### 4. 访问服务
 
-1. 单击 `Endpoint` 链接打开 OCE 控制台；首次打开需确认自签名证书告警。
+1. 单击 `Endpoint` 链接直接打开 OCE 控制台（地址已包含 `/console` 路径）；首次打开需确认自签名证书告警。
 2. 使用 `AdminEmail` 与 `AdminPassword` 登录。
 3. 登录后即可进入控制面，开始管理命名空间、Agent 与模型接入。建议尽快修改初始密码。
 
