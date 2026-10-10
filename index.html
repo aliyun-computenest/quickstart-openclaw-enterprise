@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="x-ua-compatible" content="ie=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <meta name="description" content="计算巢是阿里云开放给企业应用服务商的服务管理平台。服务商能够在计算巢上发布私有化部署服务，为其客户提供云上软件一键部署的能力；同时也支持全托管模式的服务，赋能服务商托管其客户资源。">
+  <title>OpenClaw Enterprise 社区版 部署文档 - Aliyun 计算巢 x OpenClaw Enterprise 社区版</title>
+
+  <link rel="shortcut icon" href="img/favicon.ico">
+
+  <link rel="stylesheet" href="https://unpkg.com/purecss@1.0.0/build/pure-min.css">
+  <link rel="stylesheet" href="css/theme.css">
+  
+
+  
+
+  
+  
+
+  
+    <script src="search/main.js"></script>
+  
+
+  
+
+  <script src="js/highlight.min.js"></script>
+  <script>hljs.highlightAll();</script>
+</head>
+
+<body>
+  <div class="container">
+    <div class="nav">
+      <div class="nav-inner">
+        <div class="logo">
+          <img src="./img/logo-2x.png">
+        </div>
+        <div class="nav-list">
+          <ul>
+          
+              <li><a href="#openclaw-enterprise">OpenClaw Enterprise 社区版 部署文档</a></li>
+              
+                  <li><a href="#_1">概述</a></li>
+                  
+              
+                  <li><a href="#_2">部署架构</a></li>
+                  
+              
+                  <li><a href="#_3">前提条件</a></li>
+                  
+                      <li class="li-h3"><a href="#ack">复用已有 ACK 集群的要求</a></li>
+                  
+              
+                  <li><a href="#_4">部署流程</a></li>
+                  
+                      <li class="li-h3"><a href="#1">1. 创建服务实例</a></li>
+                  
+                      <li class="li-h3"><a href="#2">2. 确认订单并创建</a></li>
+                  
+                      <li class="li-h3"><a href="#3">3. 等待部署完成</a></li>
+                  
+                      <li class="li-h3"><a href="#4">4. 访问服务</a></li>
+                  
+              
+                  <li><a href="#_5">使用说明</a></li>
+                  
+                      <li class="li-h3"><a href="#_6">配置模型接入</a></li>
+                  
+                      <li class="li-h3"><a href="#agent">部署第一个 Agent</a></li>
+                  
+              
+                  <li><a href="#_7">部署后核验</a></li>
+                  
+              
+                  <li><a href="#_8">数据与运维</a></li>
+                  
+              
+                  <li><a href="#_9">安全说明</a></li>
+                  
+              
+                  <li><a href="#_10">故障排查</a></li>
+                  
+                      <li class="li-h3"><a href="#ack_1">ACK 部署长时间未完成</a></li>
+                  
+                      <li class="li-h3"><a href="#pending-crashloopbackoff">组件处于 Pending / CrashLoopBackOff</a></li>
+                  
+              
+                  <li><a href="#_11">官方文档</a></li>
+                  
+              
+                  <li><a href="#_12">免责声明</a></li>
+                  
+              
+          
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="content theme-github">
+      
+      <div class="content-inner">        
+        
+        <h1 id="openclaw-enterprise">OpenClaw Enterprise 社区版 部署文档</h1>
+<h2 id="_1">概述</h2>
+<p>OpenClaw Enterprise（OCE）是一款开源、厂商中立的智能体（Agent）管理平台，可以理解为「面向 Agent 的 Kubernetes」。它通过 OpenClaw Control Plane（OCC）统一部署和管理 Agent 及其版本（Revision），支持模型接入、沙箱运行时、RBAC 与多租户命名空间。</p>
+<p>通过阿里云计算巢服务，您可以一键部署 OpenClaw Enterprise 社区版：服务自动创建一套 <strong>ACK 托管 Pro 集群</strong>（或复用您已有的 ACK 集群），并在其中安装控制面、Agent 运行时、PostgreSQL 与 HTTPS 接入层，实现开箱即用。</p>
+<h2 id="_2">部署架构</h2>
+<p>服务在 ACK 集群的目标命名空间（默认 <code>openclaw-enterprise</code>）内部署以下组件：</p>
+<table>
+<thead>
+<tr>
+<th>组件</th>
+<th>类型</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>openclaw-enterprise-api</code></td>
+<td>Deployment</td>
+<td>控制面 API（OCC），管理 Agent / Revision</td>
+</tr>
+<tr>
+<td><code>openclaw-enterprise-worker</code></td>
+<td>Deployment</td>
+<td>Agent 调度与运行时工作器</td>
+</tr>
+<tr>
+<td><code>openclaw-enterprise-bootstrap</code></td>
+<td>Deployment</td>
+<td>初始化与数据迁移</td>
+</tr>
+<tr>
+<td><code>openclaw-enterprise-endpoint</code></td>
+<td>Deployment</td>
+<td>对外端点服务</td>
+</tr>
+<tr>
+<td><code>openclaw-enterprise-tls-proxy</code></td>
+<td>Deployment</td>
+<td>HTTPS 接入与 TLS 终结</td>
+</tr>
+<tr>
+<td><code>openclaw-enterprise-registry-sync</code></td>
+<td>Deployment</td>
+<td>镜像 / 运行时注册表同步</td>
+</tr>
+<tr>
+<td><code>openclaw-enterprise-postgres</code></td>
+<td>StatefulSet</td>
+<td>PostgreSQL 元数据存储（云盘 PVC 持久化）</td>
+</tr>
+<tr>
+<td>Flux（helm-controller / source-controller）</td>
+<td>系统组件</td>
+<td>以 GitOps 方式安装与维护 Helm 应用</td>
+</tr>
+</tbody>
+</table>
+<p>集群侧由服务自动创建并维护 VPC、交换机与安全组；对外通过负载均衡（SLB）+ HTTPS 域名（<code>*.sslip.io</code>）暴露控制台。Controller、Runtime、PostgreSQL 镜像与 Helm Chart 均以计算巢部署物交付，避免运行时直接依赖境外镜像仓库。</p>
+<h2 id="_3">前提条件</h2>
+<h3 id="ack">复用已有 ACK 集群的要求</h3>
+<p>若「集群方式」选择复用已有 ACK 集群，目标集群需满足：</p>
+<ul>
+<li>集群状态正常，工作节点具备足够 CPU、内存和可用云盘配额；</li>
+<li>已安装并可使用 CSI 云盘驱动；</li>
+<li>允许创建 <code>LoadBalancer</code> Service、ClusterRole、ClusterRoleBinding、PVC 和 Secret；</li>
+<li>默认 StorageClass <code>alicloud-disk-topology-alltype</code> 可用，以便 PVC 按工作负载所在可用区动态绑定；</li>
+<li>部署身份必须是服务消费者账号，并具备访问该 ACK 集群的权限。</li>
+</ul>
+<h2 id="_4">部署流程</h2>
+<h3 id="1">1. 创建服务实例</h3>
+<p>访问 OpenClaw Enterprise 社区版 服务部署链接，按提示填写部署参数：</p>
+<p><a href="https://computenest.console.aliyun.com/service/instance/create/cn-hangzhou?type=user&amp;ServiceId=service-70f80f1f8680499089b4">部署链接</a></p>
+<p>在模板选择页选择 <strong>ACK 集群版</strong>，点击 <strong>下一步</strong> 进入参数填写页。主要参数说明如下：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>集群方式</td>
+<td><code>NewAck</code> 新建 ACK 托管 Pro 集群；或选择复用已有 ACK 集群</td>
+</tr>
+<tr>
+<td>已有 ACK 集群</td>
+<td>仅当「集群方式」选择复用已有集群时填写</td>
+</tr>
+<tr>
+<td>可用区</td>
+<td>部署所在可用区（如 <code>cn-hongkong-b</code>），请选择有库存的可用区</td>
+</tr>
+<tr>
+<td>工作节点规格</td>
+<td>工作节点 ECS 规格，默认 <code>ecs.g8i.2xlarge</code>（8 vCPU / 32 GiB）</td>
+</tr>
+<tr>
+<td>工作节点数量</td>
+<td>工作节点个数，默认 3（可选 2～10）</td>
+</tr>
+<tr>
+<td>节点登录密码</td>
+<td>工作节点 ECS 登录密码，需包含大小写字母、数字及特殊符号</td>
+</tr>
+<tr>
+<td>初始管理员邮箱</td>
+<td>OCE 控制台初始管理员邮箱，默认 <code>admin@example.com</code></td>
+</tr>
+<tr>
+<td>Kubernetes 命名空间</td>
+<td>组件部署到的命名空间，默认 <code>openclaw-enterprise</code></td>
+</tr>
+<tr>
+<td>VPC / 交换机网段</td>
+<td>新建集群时的网络网段，默认 <code>192.168.0.0/16</code> / <code>192.168.0.0/20</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>新建集群时，VPC、交换机与安全组由服务自动创建与维护，请确认网段不与现有网络冲突，无需手动配置。</p>
+</blockquote>
+<h3 id="2">2. 确认订单并创建</h3>
+<p>参数填写完成后可以看到对应询价明细（ACK、ECS、云盘和负载均衡费用），确认参数后点击 <strong>下一步：确认订单</strong>。确认订单完成后同意服务协议并点击 <strong>立即创建</strong> 进入部署阶段。</p>
+<h3 id="3">3. 等待部署完成</h3>
+<p>部署包含「创建 ACK 集群 → 工作节点就绪 → 安装 Flux 与 Helm 应用 → 等待控制面各组件就绪」等阶段，通常需要 <strong>15～25 分钟</strong>。等待实例状态变为「已部署」后进入服务实例管理页。</p>
+<p>部署完成后，实例详情页将输出以下访问信息：</p>
+<table>
+<thead>
+<tr>
+<th>输出项</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Endpoint</code></td>
+<td>OCE 控制台 HTTPS 访问地址，形如 <code>https://openclaw-&lt;ip&gt;.sslip.io/console</code></td>
+</tr>
+<tr>
+<td><code>AdminEmail</code></td>
+<td>初始管理员邮箱</td>
+</tr>
+<tr>
+<td><code>AdminPassword</code></td>
+<td>初始管理员密码（部署时自动生成）</td>
+</tr>
+<tr>
+<td><code>ClusterId</code></td>
+<td>实际使用的 ACK 集群 ID</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>请妥善保存 <code>AdminPassword</code>，不要写入代码仓库、日志或公开文档。</p>
+</blockquote>
+<h3 id="4">4. 访问服务</h3>
+<ol>
+<li>单击 <code>Endpoint</code> 链接直接打开 OCE 控制台（地址已包含 <code>/console</code> 路径）；首次打开需确认自签名证书告警。</li>
+<li>使用 <code>AdminEmail</code> 与 <code>AdminPassword</code> 登录。</li>
+<li>登录后即可进入控制面，开始管理命名空间、Agent 与模型接入。建议尽快修改初始密码。</li>
+</ol>
+<h2 id="_5">使用说明</h2>
+<h3 id="_6">配置模型接入</h3>
+<p>OCE 中的 Agent 需要对接一个大模型服务才能响应请求。登录后在控制台配置模型提供商（Model Provider）并填入对应的 API Key（如 OpenAI 兼容接口），作为 Agent 的默认模型或按 Agent 覆盖。</p>
+<h3 id="agent">部署第一个 Agent</h3>
+<ol>
+<li>在控制台创建（或从 Agent Preset 复制）一个 Agent 草稿；</li>
+<li>填写运行时与模型配置，提交生成一个 Revision；</li>
+<li>发布该 Revision，OCC 会调度 worker 在集群中拉起 Agent 沙箱；</li>
+<li>向 Agent 发送一条模型请求，验证端到端链路。</li>
+</ol>
+<p>更详细的概念与操作（Control Plane、Agent、Revision、Preset、命名空间恢复等）见官方文档。</p>
+<h2 id="_7">部署后核验</h2>
+<p>如需确认集群内组件真实就绪，可通过 ACK 控制台或 <code>kubectl</code> 查看目标命名空间下资源状态：</p>
+<pre><code class="language-bash">kubectl get nodes
+kubectl -n openclaw-enterprise get deploy,statefulset,pod,svc,pvc
+</code></pre>
+<p>预期：工作节点均为 <code>Ready</code>；6 个 Deployment 与 <code>openclaw-enterprise-postgres</code> StatefulSet 均为 Ready / Running；两个 PVC 均为 <code>Bound</code>；<code>openclaw-enterprise-tls-proxy</code> 的 <code>LoadBalancer</code> Service 已分配外部地址。</p>
+<h2 id="_8">数据与运维</h2>
+<ul>
+<li>PostgreSQL 数据与 bootstrap 数据持久化在阿里云云盘 PVC 上，删除 Pod 不会丢失元数据；<strong>删除服务实例会一并释放集群与云盘</strong>，请先备份必要数据。</li>
+<li>组件通过 Flux（GitOps）安装与维护，正常情况下无需手动 <code>helm</code> 操作；如需排查，可在集群内查看 <code>flux-system</code> 命名空间下 controller 日志。</li>
+<li>工作节点为按量付费 ECS，长期运行请关注费用；不用时可通过删除服务实例回收整套集群资源。</li>
+</ul>
+<h2 id="_9">安全说明</h2>
+<ol>
+<li><strong>保护管理员凭据</strong>：<code>AdminPassword</code> 为部署时自动生成的强密码，数据库密码与认证密钥由 ROS 随机生成，请仅在可信渠道保存与分发。</li>
+<li><strong>HTTPS 接入</strong>：控制台经 <code>tls-proxy</code> 以 HTTPS 暴露，当前使用实例内自动生成的自签名证书；如需限制访问来源，可在 SLB / 安全组层面收敛来源 CIDR。</li>
+<li><strong>集群访问控制</strong>：OCE 支持 RBAC 与多租户命名空间，服务会创建集群级 RBAC 资源；同一集群内的多个实例必须使用不同命名空间，生产环境建议按团队划分命名空间并最小化授权，删除实例前请确认没有外部工作负载依赖该命名空间。</li>
+</ol>
+<h2 id="_10">故障排查</h2>
+<h3 id="ack_1">ACK 部署长时间未完成</h3>
+<p>检查节点是否 Ready、PVC 是否 Bound、LoadBalancer 是否分配地址：</p>
+<pre><code class="language-bash">kubectl get nodes
+kubectl -n openclaw-enterprise get pods,pvc
+kubectl -n openclaw-enterprise get svc openclaw-enterprise-tls-proxy
+</code></pre>
+<p>若使用已有 ACK 集群，重点检查集群权限、CSI 云盘驱动、默认 StorageClass 与 SLB 配额。</p>
+<h3 id="pending-crashloopbackoff">组件处于 Pending / CrashLoopBackOff</h3>
+<ul>
+<li>Pod 长时间 <code>Pending</code>：多为节点资源不足或 PVC 未绑定，检查节点可分配资源与 StorageClass。</li>
+<li>容器 <code>CrashLoopBackOff</code>：查看对应 Pod 日志定位；确认镜像已随计算巢部署物正常交付。</li>
+</ul>
+<h2 id="_11">官方文档</h2>
+<p>更多信息请访问官方文档：<a href="https://github.com/openclaw/openclaw-enterprise/blob/main/docs/guides/kubernetes-setup.md">OpenClaw Enterprise Kubernetes 部署指南</a></p>
+<h2 id="_12">免责声明</h2>
+<blockquote>
+<p>本服务由第三方提供，我们尽力确保其安全性、准确性和可靠性，但无法保证其完全免于故障、中断、错误或攻击。因此，本公司在此声明：对于本服务的内容、准确性、完整性、可靠性、适用性以及及时性不作任何陈述、保证或承诺，不对您使用本服务所产生的任何直接或间接的损失或损害承担任何责任；对于您通过本服务访问的第三方网站、应用程序、产品和服务，不对其内容、准确性、完整性、可靠性、适用性以及及时性承担任何责任，您应自行承担使用后果产生的风险和责任；对于因您使用本服务而产生的任何损失、损害，包括但不限于直接损失、间接损失、利润损失、商誉损失、数据损失或其他经济损失，不承担任何责任，即使本公司事先已被告知可能存在此类损失或损害的可能性；我们保留不时修改本声明的权利，因此请您在使用本服务前定期检查本声明。如果您对本声明或本服务存在任何问题或疑问，请联系我们。</p>
+</blockquote>
+        
+      </div>
+
+      <div class="copyrights">© 2009-2022 Aliyun.com 版权所有</div>
+    </div>
+  </div>
+  
+  <!--
+  MkDocs version      : 1.6.1
+  Docs Build Date UTC : 2026-10-10 03:22:27.994987+00:00
+  -->
+</body>
+</html>
