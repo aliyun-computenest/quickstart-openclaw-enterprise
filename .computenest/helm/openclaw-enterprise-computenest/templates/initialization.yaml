@@ -13,11 +13,17 @@ data:
     const require = createRequire("/app/apps/controller/package.json");
     const { Pool } = require("pg");
     const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+    // 上游 bootstrap 在 production 模式只接受 https 基址；账号与 issuer 只依赖 installationId，
+    // 与协议无关，因此 HTTP 访问模式下按同一主机的 https 基址完成初始化，运行期仍使用 http。
+    const bootstrapEnv = {
+      ...process.env,
+      OCC_AUTH_BASE_URL: (process.env.OCC_AUTH_BASE_URL ?? "").replace(/^http:\/\//, "https://"),
+    };
 
     function runBootstrap() {
       return new Promise((resolve, reject) => {
         const child = spawn(process.execPath, ["scripts/bootstrap-installation.mjs"], {
-          env: process.env,
+          env: bootstrapEnv,
           stdio: "inherit",
         });
         child.once("error", reject);
@@ -93,6 +99,9 @@ spec:
             - {name: OCE_SERVICE_NAME, value: openclaw-enterprise}
             - {name: OCE_ENDPOINT_CONFIGMAP, value: openclaw-enterprise-endpoint}
             - {name: OCE_TLS_SECRET, value: openclaw-enterprise-tls}
+            - {name: OCE_ENDPOINT_MODE, value: {{ .Values.endpoint.mode | default "ip" | quote }}}
+            - {name: OCE_ENDPOINT_DOMAIN, value: {{ .Values.endpoint.domain | default "" | quote }}}
+            - {name: OCE_ENDPOINT_PROTOCOL, value: {{ include "oce.protocol" . | quote }}}
           securityContext:
             {{- include "oce.containerSecurity" . | nindent 12 }}
           resources:

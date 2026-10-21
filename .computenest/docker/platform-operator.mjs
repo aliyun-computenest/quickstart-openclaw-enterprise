@@ -79,12 +79,23 @@ async function upsert(context, kind, name, body) {
   return request(context, "PUT", `${base}/${name}`, body);
 }
 
+const ipv4Pattern = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+// OCC_AUTH_BASE_URL 只信任单一 origin，用户必须用这里生成的 host 访问才能登录。
+// ip（默认）：直接用 SLB 公网 IP；domain：用户自有域名（需自行解析到 SLB）；sslip：openclaw-<ip>.sslip.io。
 function endpointHost(ingress) {
-  if (ingress.ip) {
+  const address = ingress.ip ?? ingress.hostname;
+  if (!address) return undefined;
+  const mode = process.env.OCE_ENDPOINT_MODE ?? "ip";
+  const domain = process.env.OCE_ENDPOINT_DOMAIN?.trim().toLowerCase();
+  if (mode === "domain") {
+    if (domain) return domain;
+    process.stdout.write("Endpoint mode is domain but no domain is set; falling back to the load balancer address\n");
+  }
+  if (mode === "sslip" && ingress.ip) {
     return `openclaw-${ingress.ip.replaceAll(".", "-")}.sslip.io`;
   }
-  if (ingress.hostname) return ingress.hostname;
-  return undefined;
+  return address;
 }
 
 async function waitForEndpoint(context, serviceName) {
@@ -93,7 +104,7 @@ async function waitForEndpoint(context, serviceName) {
     const service = await request(context, "GET", path);
     const ingress = service.status?.loadBalancer?.ingress?.[0];
     const host = ingress === undefined ? undefined : endpointHost(ingress);
-    if (host) return host;
+    if (host) return { host, address: ingress.ip ?? ingress.hostname };
     process.stdout.write(`Waiting for LoadBalancer address on ${serviceName}\n`);
     await sleep(10_000);
   }
@@ -103,15 +114,18 @@ async function reconcileEndpoint(context) {
   const serviceName = process.env.OCE_SERVICE_NAME ?? "openclaw-enterprise";
   const configMapName = process.env.OCE_ENDPOINT_CONFIGMAP ?? "openclaw-enterprise-endpoint";
   const tlsSecretName = process.env.OCE_TLS_SECRET ?? "openclaw-enterprise-tls";
-  const host = await waitForEndpoint(context, serviceName);
-  const baseUrl = `https://${host}`;
+  const { host, address } = await waitForEndpoint(context, serviceName);
+  // http：tls-proxy 明文监听并放宽会话 Cookie，免自签证书告警；https：自签证书。
+  const protocol = process.env.OCE_ENDPOINT_PROTOCOL === "http" ? "http" : "https";
+  const baseUrl = `${protocol}://${host}`;
   const existing = await getOptional(
     context,
     `/api/v1/namespaces/${context.namespace}/configmaps/${configMapName}`,
   );
-  if (existing?.data?.["base-url"] === baseUrl) return baseUrl;
+  if (existing?.data?.["base-url"] === baseUrl && existing?.data?.address === address) return baseUrl;
 
-  const config = `[req]\ndistinguished_name=req_distinguished_name\nx509_extensions=v3\nprompt=no\n[req_distinguished_name]\nCN=${host}\n[v3]\nsubjectAltName=DNS:${host}\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n`;
+  const subjectAltName = ipv4Pattern.test(host) ? `IP:${host}` : `DNS:${host}`;
+  const config = `[req]\ndistinguished_name=req_distinguished_name\nx509_extensions=v3\nprompt=no\n[req_distinguished_name]\nCN=${host}\n[v3]\nsubjectAltName=${subjectAltName}\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n`;
   await writeFile("/tmp/openssl.cnf", config, "utf8");
   execFileSync("openssl", [
     "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "3650",
@@ -135,7 +149,7 @@ async function reconcileEndpoint(context) {
     apiVersion: "v1",
     kind: "ConfigMap",
     metadata: { name: configMapName, namespace: context.namespace },
-    data: { "base-url": baseUrl, host },
+    data: { "base-url": baseUrl, host, address },
   });
   process.stdout.write(`Configured public endpoint ${baseUrl}\n`);
   return baseUrl;

@@ -28,7 +28,8 @@ Service:
     TemplateConfigs:
     - Name: ACK 集群版
       Url: ros_templates/ack.yaml
-      AllowedRegions: [cn-hongkong, ap-southeast-1]
+      AllowedRegions: [cn-beijing, cn-hangzhou, cn-shanghai, cn-shenzhen, 
+          cn-guangzhou, ap-southeast-1, cn-hongkong]
       PredefinedParameters: []
       DeployScene: ACK
   OperationMetadata:
@@ -80,7 +81,7 @@ AcrImageBuilder:
   Controller:
     DockerFilePath: .computenest/docker/Dockerfile.controller
     RepoName: openclaw-enterprise-controller
-    Tag: a5cc0d7
+    Tag: a5cc0d7-chat1
   Runtime:
     DockerFilePath: .computenest/docker/Dockerfile.runtime
     RepoName: openclaw-enterprise-runtime
@@ -98,6 +99,6 @@ AcrImageBuilder:
 HelmChartBuilder:
   OpenClawEnterprise:
     HelmChartPath: 
-      resources/artifact_resources/helm_chart/openclaw-enterprise-computenest-0.1.7.tgz
+      resources/artifact_resources/helm_chart/openclaw-enterprise-computenest-0.1.13.tgz
     RepoName: openclaw-enterprise-computenest
-    Tag: 0.1.7
+    Tag: 0.1.13

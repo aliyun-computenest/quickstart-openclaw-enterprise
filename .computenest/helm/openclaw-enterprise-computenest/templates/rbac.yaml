@@ -71,3 +71,54 @@ roleRef:
   name: {{ $.Release.Name }}-openclaw-{{ $component }}
 ---
 {{- end }}
+# autopair：最小权限（聊天路由 ConfigMap + gateway Pod 的 exec 审批）。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openclaw-enterprise-autopair-routes
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["gateway-chat-routes"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openclaw-enterprise-autopair-routes
+subjects:
+  - {kind: ServiceAccount, name: openclaw-enterprise-autopair}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openclaw-enterprise-autopair-routes
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-openclaw-autopair
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    # WebSocket exec 走 GET 方法（需 get），SPDY exec 走 POST（需 create）。
+    verbs: ["get", "create"]
+  # 聊天路由需要找 agent namespace 里 gateway- 前缀的 Service（agent ns 动态创建，只能集群级授权）。
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-openclaw-autopair
+subjects:
+  - kind: ServiceAccount
+    name: openclaw-enterprise-autopair
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-openclaw-autopair

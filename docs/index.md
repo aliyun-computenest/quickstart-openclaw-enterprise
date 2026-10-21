@@ -21,7 +21,7 @@ OpenClaw Enterprise（OCE）是一款开源、厂商中立的智能体（Agent�
 | `openclaw-enterprise-postgres` | StatefulSet | PostgreSQL 元数据存储（云盘 PVC 持久化） |
 | Flux（helm-controller / source-controller） | 系统组件 | 以 GitOps 方式安装与维护 Helm 应用 |
 
-集群侧由服务自动创建并维护 VPC、交换机与安全组；对外通过负载均衡（SLB）+ HTTPS 域名（`*.sslip.io`）暴露控制台。Controller、Runtime、PostgreSQL 镜像与 Helm Chart 均以计算巢部署物交付，避免运行时直接依赖境外镜像仓库。
+集群侧由服务自动创建并维护 VPC、交换机与安全组；对外通过负载均衡（SLB）以 HTTPS 暴露控制台，访问地址默认为负载均衡公网 IP，也可指定自定义域名。Controller、Runtime、PostgreSQL 镜像与 Helm Chart 均以计算巢部署物交付，避免运行时直接依赖境外镜像仓库。
 
 ## 前提条件
 
@@ -55,9 +55,14 @@ OpenClaw Enterprise（OCE）是一款开源、厂商中立的智能体（Agent�
 | 节点登录密码 | 工作节点 ECS 登录密码，需包含大小写字母、数字及特殊符号 |
 | 初始管理员邮箱 | OCE 控制台初始管理员邮箱，默认 `admin@example.com` |
 | Kubernetes 命名空间 | 组件部署到的命名空间，默认 `openclaw-enterprise` |
+| 控制台访问方式 | 默认「负载均衡公网 IP」，通过 `http://<IP>/console` 访问；选择「自定义域名」时通过 `http://<域名>/console` 访问 |
+| 自定义域名 | 仅当访问方式为「自定义域名」时必填，例如 `openclaw.example.com`，不带协议和路径 |
+| 控制台访问协议 | 默认 `HTTP`（80 端口），浏览器打开即用、无证书告警；选择 `HTTPS`（443 端口）时使用实例内自签名证书，首次访问需确认证书告警 |
 | VPC / 交换机网段 | 新建集群时的网络网段，默认 `192.168.0.0/16` / `192.168.0.0/20` |
 
 > 新建集群时，VPC、交换机与安全组由服务自动创建与维护，请确认网段不与现有网络冲突，无需手动配置。
+
+> OCE 出于安全考虑只接受来自部署时确定的访问地址的登录请求。选择 IP 访问时请始终用输出的 IP 地址访问；选择自定义域名时请始终用该域名访问，用其他地址或其他协议（例如用 IP 访问域名模式的实例、用 https 访问 HTTP 模式的实例）会导致登录失败。
 
 ### 2. 确认订单并创建
 
@@ -71,7 +76,8 @@ OpenClaw Enterprise（OCE）是一款开源、厂商中立的智能体（Agent�
 
 | 输出项 | 内容 |
 | --- | --- |
-| `Endpoint` | OCE 控制台 HTTPS 访问地址，形如 `https://openclaw-<ip>.sslip.io/console` |
+| `Endpoint` | OCE 控制台访问地址，形如 `http://<IP>/console`；选择自定义域名或 HTTPS 时相应为 `http(s)://<域名或 IP>/console` |
+| `LoadBalancerAddress` | 负载均衡公网 IP，使用自定义域名时需将域名解析到该地址 |
 | `AdminEmail` | 初始管理员邮箱 |
 | `AdminPassword` | 初始管理员密码（部署时自动生成） |
 | `ClusterId` | 实际使用的 ACK 集群 ID |
@@ -80,9 +86,10 @@ OpenClaw Enterprise（OCE）是一款开源、厂商中立的智能体（Agent�
 
 ### 4. 访问服务
 
-1. 单击 `Endpoint` 链接直接打开 OCE 控制台（地址已包含 `/console` 路径）；首次打开需确认自签名证书告警。
-2. 使用 `AdminEmail` 与 `AdminPassword` 登录。
-3. 登录后即可进入控制面，开始管理命名空间、Agent 与模型接入。建议尽快修改初始密码。
+1. 若选择了自定义域名，先在您的 DNS 服务商处添加一条 A 记录，将该域名解析到输出中的 `LoadBalancerAddress`，待解析生效后再访问。
+2. 单击 `Endpoint` 链接直接打开 OCE 控制台（地址已包含 `/console` 路径）；选择 HTTPS 协议时首次打开需确认自签名证书告警。
+3. 使用 `AdminEmail` 与 `AdminPassword` 登录。
+4. 登录后即可进入控制面，开始管理命名空间、Agent 与模型接入。建议尽快修改初始密码。
 
 ## 使用说明
 
@@ -98,6 +105,27 @@ OCE 中的 Agent 需要对接一个大模型服务才能响应请求。登录后
 4. 向 Agent 发送一条模型请求，验证端到端链路。
 
 更详细的概念与操作（Control Plane、Agent、Revision、Preset、命名空间恢复等）见官方文档。
+
+### 与 Agent 对话（网页聊天，开箱即用）
+
+Agent 发布成功后，无需任何手工网络或认证配置，即可从浏览器与它对话：
+
+1. **打开聊天页**：在 OCE 控制台进入 Agent 详情页，点击工具栏的 **Open Chat** 按钮，会在新窗口打开 `http://<负载均衡IP>:8080/`；
+2. **输入聊天密码**：首次打开会出现密码输入框。聊天密码保存在集群 Secret（`openclaw-agent-transport-*`）的 `gateway-password` 字段中，在能访问集群的终端执行：
+
+```bash
+# 1) 定位 Agent 的 transport secret（位于 oce- 开头的业务命名空间）
+kubectl get secret -A | grep openclaw-agent-transport
+# 2) 读取聊天密码（替换 <namespace> 与 <secret名> 为上一步结果）
+kubectl -n <namespace> get secret <secret名> -o jsonpath='{.data.gateway-password}' | base64 -d
+```
+
+3. **自动配对**：提交密码后页面短暂显示「等待批准」，实例内置的自动配对组件会在约 5 秒内自动批准该浏览器，随后直接进入聊天界面；
+4. **开始对话**：输入消息即可获得 Agent 回复（模型与提示词跟随 Agent 配置）。
+
+> - 聊天入口经负载均衡的 **8080 端口**对外暴露，该监听在首次部署时由系统（阿里云 CCM）自动创建，无需手工配置；
+> - 网页聊天采用 Gateway 密码认证 + 设备配对双重保护，请妥善保管聊天密码；
+> - 命令行验证方式仍然可用：`kubectl -n <namespace> exec <gateway pod> -c gateway -- openclaw agent --local -m "你好"`。
 
 ## 部署后核验
 
@@ -119,7 +147,7 @@ kubectl -n openclaw-enterprise get deploy,statefulset,pod,svc,pvc
 ## 安全说明
 
 1. **保护管理员凭据**：`AdminPassword` 为部署时自动生成的强密码，数据库密码与认证密钥由 ROS 随机生成，请仅在可信渠道保存与分发。
-2. **HTTPS 接入**：控制台经 `tls-proxy` 以 HTTPS 暴露，当前使用实例内自动生成的自签名证书；如需限制访问来源，可在 SLB / 安全组层面收敛来源 CIDR。
+2. **访问协议与来源限制**：控制台经 `tls-proxy` 暴露，默认 HTTP（80 端口），登录凭据与会话以明文传输，建议在 SLB / 安全组层面将访问来源收敛到办公网等可信 CIDR；对传输安全有要求时请选择 HTTPS（实例内自签名证书）。
 3. **集群访问控制**：OCE 支持 RBAC 与多租户命名空间，服务会创建集群级 RBAC 资源；同一集群内的多个实例必须使用不同命名空间，生产环境建议按团队划分命名空间并最小化授权，删除实例前请确认没有外部工作负载依赖该命名空间。
 
 ## 故障排查
@@ -135,6 +163,10 @@ kubectl -n openclaw-enterprise get svc openclaw-enterprise-tls-proxy
 ```
 
 若使用已有 ACK 集群，重点检查集群权限、CSI 云盘驱动、默认 StorageClass 与 SLB 配额。
+
+### 控制台能打开但登录失败
+
+登录只接受来自 `Endpoint` 所示地址的请求。请确认浏览器地址栏中的主机名与 `Endpoint` 完全一致：IP 模式使用 IP 访问，自定义域名模式使用该域名访问且域名已解析到 `LoadBalancerAddress`。
 
 ### 组件处于 Pending / CrashLoopBackOff
 

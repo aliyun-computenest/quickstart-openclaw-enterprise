@@ -138,6 +138,7 @@ spec:
           secret:
             secretName: openclaw-enterprise-tls
         - {name: temporary, emptyDir: {sizeLimit: 64Mi}}
+        - {name: chat-routes, configMap: {name: gateway-chat-routes}}
       containers:
         - name: proxy
           image: {{ .Values.images.controller | quote }}
@@ -147,21 +148,26 @@ spec:
             - {name: PORT, value: "8443"}
             - {name: UPSTREAM_HOST, value: openclaw-enterprise-api}
             - {name: UPSTREAM_PORT, value: "8080"}
+            - {name: PROXY_PROTOCOL, value: {{ include "oce.protocol" . | quote }}}
+            - {name: CHAT_PORT, value: "8444"}
+            - {name: CHAT_ROUTES_FILE, value: /etc/oce/chat-routes/routes.json}
           securityContext:
             {{- include "oce.containerSecurity" . | nindent 12 }}
           resources:
             {{- toYaml .Values.resources.controller | nindent 12 }}
           ports:
-            - {name: https, containerPort: 8443}
+            - {name: proxy, containerPort: 8443}
+            - {name: chat, containerPort: 8444}
           readinessProbe:
-            tcpSocket: {port: https}
+            tcpSocket: {port: proxy}
             periodSeconds: 5
           livenessProbe:
-            tcpSocket: {port: https}
+            tcpSocket: {port: proxy}
             initialDelaySeconds: 20
           volumeMounts:
             - {name: tls, mountPath: /etc/openclaw/tls, readOnly: true}
             - {name: temporary, mountPath: /tmp}
+            - {name: chat-routes, mountPath: /etc/oce/chat-routes, readOnly: true}
 ---
 apiVersion: v1
 kind: Service
@@ -179,4 +185,22 @@ spec:
     {{- include "oce.selector" . | nindent 4 }}
     app.kubernetes.io/component: tls-proxy
   ports:
-    - {name: https, port: {{ .Values.service.port }}, targetPort: https, protocol: TCP}
+    - name: {{ include "oce.protocol" . }}
+      port: {{ .Values.service.port | default (ternary 80 443 (eq (include "oce.protocol" .) "http")) }}
+      targetPort: proxy
+      protocol: TCP
+    # 网页聊天入口：SLB 自动同步该端口监听，后端经路由 ConfigMap 转发到默认 Agent gateway。
+    - name: chat
+      port: 8080
+      targetPort: chat
+      protocol: TCP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-chat-routes
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+data:
+  routes.json: |-
+    {"default":"","namespace":""}

@@ -11,10 +11,19 @@ databasePassword: change-me
 applicationDatabasePassword: change-me
 migrationDatabasePassword: change-me
 
+# Console access address, also used as OCC_AUTH_BASE_URL (the only trusted sign-in origin).
+# mode: ip (load balancer address) | domain (custom domain resolved to the load balancer) | sslip
+# protocol: https (self-signed certificate) | http (plain text, no certificate warning)
+endpoint:
+  mode: ip
+  domain: ""
+  protocol: https
+
 service:
   type: LoadBalancer
   annotations: {}
-  port: 443
+  # Defaults to 80 for http and 443 for https.
+  port: ""
 
 imagePullSecret:
   name: computenest-acr
@@ -24,6 +33,11 @@ storage:
   className: alicloud-disk-topology-alltype
   postgresSize: 40Gi
   bootstrapSize: 20Gi
+  # 上游为每个 Agent gateway 固定申请 10Gi 卷，低于 ESSD 的 20GiB 下限；
+  # 单独提供支持小容量的 ESSD AutoPL / ESSD Entry 存储类。
+  gateway:
+    className: openclaw-enterprise-gateway
+    diskTypes: cloud_auto,cloud_essd_entry,cloud_essd
 
 resources:
   controller:

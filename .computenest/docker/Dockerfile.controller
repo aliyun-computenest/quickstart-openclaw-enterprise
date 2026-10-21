@@ -14,6 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
       -o /tmp/source.tar.gz \
     && tar -xzf /tmp/source.tar.gz --strip-components=1 \
     && rm /tmp/source.tar.gz
+# 控制台默认模型提供方改为阿里云百炼（上游默认 api.openai.com 国内不可达），
+# 并默认 Embedded/OpenClaw（Dedicated/Codex 依赖未部署的后端）。
+COPY .computenest/docker/patch-bailian-defaults.mjs /tmp/patch-bailian-defaults.mjs
+RUN node /tmp/patch-bailian-defaults.mjs /source && rm /tmp/patch-bailian-defaults.mjs
 
 FROM ${NODE_BASE_IMAGE} AS dependencies
 WORKDIR /app
@@ -60,6 +64,7 @@ COPY --from=source --chown=node:node /source/scripts/lib/auth-maintain-arguments
 COPY --from=source --chown=node:node /source/deploy/presets deploy/presets
 COPY --chown=node:node .computenest/docker/platform-operator.mjs /opt/oce/computenest/platform-operator.mjs
 COPY --chown=node:node .computenest/docker/tls-proxy.mjs /opt/oce/computenest/tls-proxy.mjs
+COPY --chown=node:node .computenest/docker/autopair.mjs /opt/oce/computenest/autopair.mjs
 LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw-enterprise"
 LABEL org.opencontainers.image.revision=${OCE_COMMIT}
 USER node

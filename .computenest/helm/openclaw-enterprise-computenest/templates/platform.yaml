@@ -47,8 +47,12 @@ stringData:
     occ:
       cluster: {{ .Release.Name | quote }}
     backend: []
+    # 上游默认 Preset 指向 api.openai.com（国内不可达）或需要 dedicated 后端，
+    # 这里只提供接入阿里云百炼的 OpenClaw Preset。
     presets:
-      includeDefaults: true
+      includeDefaults: false
+      files:
+        - bailian-openclaw.json
     drivers:
       plugin:
         id: codex-plugin
@@ -98,7 +102,7 @@ stringData:
             audience: openclaw-enterprise
             expirationSeconds: 900
           runtime:
-            gatewayStorageClassName: {{ .Values.storage.className | quote }}
+            gatewayStorageClassName: {{ .Values.storage.gateway.className | quote }}
             nativeOpenClawSessionCapacity: 8
             transportSecretPrefix: openclaw-agent-transport
       secret:
@@ -106,6 +110,21 @@ stringData:
         configuration:
           authentication:
             mode: inCluster
+  bailian-openclaw.json: |
+    {{- .Files.Get "files/presets/bailian-openclaw.json" | nindent 4 }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.storage.gateway.className }}
+  labels:
+    {{- include "oce.labels" . | nindent 4 }}
+provisioner: diskplugin.csi.alibabacloud.com
+parameters:
+  type: {{ .Values.storage.gateway.diskTypes | quote }}
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

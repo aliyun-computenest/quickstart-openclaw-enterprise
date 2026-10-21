@@ -36,3 +36,7 @@ postgresql://occ_migrator:{{ .Values.migrationDatabasePassword }}@openclaw-enter
 {{- define "oce.runtimeImage" -}}
 {{- printf "%s@%s" (regexReplaceAll ":[^/:]+$" .Values.images.runtime "") .Values.images.runtimeDigest -}}
 {{- end }}
+
+{{- define "oce.protocol" -}}
+{{- ternary "http" "https" (eq (.Values.endpoint.protocol | default "https") "http") -}}
+{{- end }}

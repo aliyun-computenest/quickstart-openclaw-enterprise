@@ -84,6 +84,57 @@ Parameters:
     Label:
       zh-cn: Kubernetes 命名空间
       en: Kubernetes namespace
+  # 上游鉴权只信任 OCC_AUTH_BASE_URL 这一个 origin，用户必须用这里确定的地址访问才能登录。
+  EndpointMode:
+    Type: String
+    Default: ip
+    AllowedValues: [ip, domain]
+    AssociationPropertyMetadata:
+      ValueLabelMapping:
+        ip:
+          zh-cn: 负载均衡公网 IP
+          en: Load balancer public IP
+        domain:
+          zh-cn: 自定义域名
+          en: Custom domain
+    Label:
+      zh-cn: 控制台访问方式
+      en: Console access mode
+    Description:
+      zh-cn: 控制台只能通过这里选定的地址登录。选择自定义域名时，部署完成后需把域名 A 记录解析到输出中的负载均衡 IP。
+      en: Sign-in only works through the address chosen here. For a custom domain, point its A record to the load balancer IP shown in the outputs after deployment.
+  EndpointDomain:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^([a-zA-Z0-9]([-a-zA-Z0-9]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$'
+    AssociationPropertyMetadata:
+      Visible:
+        Condition:
+          Fn::Equals: ['${EndpointMode}', domain]
+    Label:
+      zh-cn: 自定义域名
+      en: Custom domain
+    Description:
+      zh-cn: 例如 openclaw.example.com，不带协议和路径。
+      en: For example openclaw.example.com, without scheme or path.
+  EndpointProtocol:
+    Type: String
+    Default: http
+    AllowedValues: [http, https]
+    AssociationPropertyMetadata:
+      ValueLabelMapping:
+        http:
+          zh-cn: HTTP（80 端口，无证书告警）
+          en: HTTP (port 80, no certificate warning)
+        https:
+          zh-cn: HTTPS（443 端口，自签名证书）
+          en: HTTPS (port 443, self-signed certificate)
+    Label:
+      zh-cn: 控制台访问协议
+      en: Console access protocol
+    Description:
+      zh-cn: HTTP 打开即用但传输不加密，建议限制负载均衡访问来源；HTTPS 使用实例内自签名证书，浏览器首次访问会提示证书不受信任。
+      en: HTTP works out of the box but traffic is unencrypted, so restrict load balancer sources; HTTPS uses a self-signed certificate that browsers warn about on first visit.
   VpcCidr:
     Type: String
     Default: 192.168.0.0/16
@@ -104,6 +155,19 @@ Parameters:
     Label:
       zh-cn: 交换机网段
       en: VSwitch CIDR
+Rules:
+  DomainRequired:
+    RuleCondition:
+      Fn::Equals:
+        - Ref: EndpointMode
+        - domain
+    Assertions:
+      - Assert:
+          Fn::Not:
+            Fn::Equals:
+              - Ref: EndpointDomain
+              - ''
+        AssertDescription: 选择自定义域名访问时必须填写域名。
 Conditions:
   CreateAck:
     Fn::Equals:
@@ -186,7 +250,7 @@ Resources:
       ZoneIds:
         - Ref: ZoneId
       SnatEntry: true
-      CloudMonitorFlags: true
+      CloudMonitorFlags: false
       Addons:
         - {Name: flannel, Config: ''}
         - {Name: csi-plugin}
@@ -244,6 +308,13 @@ Resources:
           postgres: '{{ computenest::acrimage::openclaw-enterprise-postgres }}'
         adminEmail:
           Ref: AdminEmail
+        endpoint:
+          mode:
+            Ref: EndpointMode
+          domain:
+            Ref: EndpointDomain
+          protocol:
+            Ref: EndpointProtocol
         installationName: OpenClaw Enterprise on ComputeNest
         databasePassword:
           Fn::GetAtt: [DatabasePassword, value]
@@ -326,6 +397,21 @@ Resources:
       Name: openclaw-enterprise-endpoint
       JsonPath: $.data.base-url
       FirstMatch: true
+  LoadBalancerAddressData:
+    Type: DATASOURCE::CS::ClusterApplicationResources
+    DependsOn: OpenClawHelm
+    Properties:
+      ClusterId:
+        Fn::If:
+          - CreateAck
+          - Fn::GetAtt: [ManagedKubernetesCluster, ClusterId]
+          - Ref: ExistingClusterId
+      Namespace:
+        Ref: DeploymentNamespace
+      Kind: ConfigMap
+      Name: openclaw-enterprise-endpoint
+      JsonPath: $.data.address
+      FirstMatch: true
   BootstrapPasswordData:
     Type: DATASOURCE::CS::ClusterApplicationResources
     DependsOn: OpenClawHelm
@@ -344,10 +430,21 @@ Resources:
 Outputs:
   Endpoint:
     Description:
-      zh-cn: 控制台访问地址（首次打开需确认自签名证书）
-      en: Console URL (accept the self-signed certificate on first visit)
+      zh-cn: 控制台访问地址（选择 HTTPS 时首次打开需确认自签名证书）
+      en: Console URL (with HTTPS, accept the self-signed certificate on first visit)
+    # 控制台挂在 /console，根路径 / 是 OCC API（返回 JSON 404）；
+    # base-url 同时作为 OCC_AUTH_BASE_URL 使用，不能直接改 ConfigMap，只在输出上拼接路径。
     Value:
-      Fn::GetAtt: [EndpointData, Response]
+      Fn::Join:
+        - ''
+        - - Fn::GetAtt: [EndpointData, Response]
+          - /console
+  LoadBalancerAddress:
+    Description:
+      zh-cn: 负载均衡公网地址（自定义域名需解析到此地址）
+      en: Load balancer public address (point the custom domain here)
+    Value:
+      Fn::GetAtt: [LoadBalancerAddressData, Response]
   AdminEmail:
     Description:
       zh-cn: 初始管理员邮箱
@@ -382,7 +479,7 @@ Metadata:
         Label:
           zh-cn: 新建集群配置
           en: New cluster settings
-      - Parameters: [AdminEmail, DeploymentNamespace]
+      - Parameters: [AdminEmail, DeploymentNamespace, EndpointMode, EndpointDomain, EndpointProtocol]
         Label:
           zh-cn: OpenClaw 配置
           en: OpenClaw settings
