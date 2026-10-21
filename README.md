@@ -21,12 +21,13 @@
 │   ├── Dockerfile.controller       控制面镜像
 │   ├── Dockerfile.runtime          Agent 运行时镜像
 │   ├── platform-operator.mjs       端点 / TLS / bootstrap 凭据同步算子
-│   └── tls-proxy.mjs               HTTP/HTTPS 接入代理
+│   ├── tls-proxy.mjs               HTTP/HTTPS 接入代理与多 Agent 聊天端口路由
+│   └── autopair.mjs                Agent 配对与聊天端口自动分配
 ├── helm/openclaw-enterprise-computenest/   Helm Chart 源（组件编排）
 ├── resources/
 │   ├── icons/service_logo.png      服务图标
 │   └── artifact_resources/helm_chart/
-│       └── openclaw-enterprise-computenest-0.1.8.tgz   当前使用的 Chart 部署物
+│       └── openclaw-enterprise-computenest-0.1.14.tgz   当前使用的 Chart 部署物
 └── ros_templates/
     └── ack.yaml                    ROS 编排模板（集群 / 节点池 / 组件 / 接入）
 docs/
@@ -37,6 +38,8 @@ mkdocs.yml                          MkDocs 站点配置
 ## 用户文档
 
 部署参数、访问方式、集群核验与运维说明见 [docs/index.md](docs/index.md)。
+
+网页聊天（含多 Agent 端口段 8080-8089 的分配、跳转与回收规则）见文档站「与 Agent 对话」章节：每个运行中的 Agent 自动独占一个聊天端口，第一个 Agent 固定使用 8080；复用已有 ACK 集群时需自行放行 8080-8089。
 
 ## 本地校验
 
