@@ -16,7 +16,7 @@ OpenClaw Enterprise（OCE）是一款开源、厂商中立的智能体（Agent�
 | `openclaw-enterprise-worker` | Deployment | Agent 调度与运行时工作器 |
 | `openclaw-enterprise-bootstrap` | Deployment | 初始化与数据迁移 |
 | `openclaw-enterprise-endpoint` | Deployment | 对外端点服务 |
-| `openclaw-enterprise-tls-proxy` | Deployment | HTTPS 接入与 TLS 终结 |
+| `openclaw-enterprise-tls-proxy` | Deployment | 控制台接入与 TLS 终结（HTTP/HTTPS 可切换） |
 | `openclaw-enterprise-registry-sync` | Deployment | 镜像 / 运行时注册表同步 |
 | `openclaw-enterprise-postgres` | StatefulSet | PostgreSQL 元数据存储（云盘 PVC 持久化） |
 | Flux（helm-controller / source-controller） | 系统组件 | 以 GitOps 方式安装与维护 Helm 应用 |
@@ -77,19 +77,20 @@ OpenClaw Enterprise（OCE）是一款开源、厂商中立的智能体（Agent�
 | 输出项 | 内容 |
 | --- | --- |
 | `Endpoint` | OCE 控制台访问地址，形如 `http://<IP>/console`；选择自定义域名或 HTTPS 时相应为 `http(s)://<域名或 IP>/console` |
-| `LoadBalancerAddress` | 负载均衡公网 IP，使用自定义域名时需将域名解析到该地址 |
+| `OpenChat` | 默认 Agent 的网页聊天入口，形如 `http://<IP>:8080` |
 | `AdminEmail` | 初始管理员邮箱 |
-| `AdminPassword` | 初始管理员密码（部署时自动生成） |
-| `ClusterId` | 实际使用的 ACK 集群 ID |
+| `AdminPassword` | 初始管理员密码（部署时自动生成），同时也是网页聊天的登录密码 |
 
-> 请妥善保存 `AdminPassword`，不要写入代码仓库、日志或公开文档。
+> 请妥善保存 `AdminPassword`，不要写入代码仓库、日志或公开文档。实际使用的 ACK 集群 ID 与负载均衡公网 IP 可在实例详情页的「资源」列表中查看。
 
 ### 4. 访问服务
 
-1. 若选择了自定义域名，先在您的 DNS 服务商处添加一条 A 记录，将该域名解析到输出中的 `LoadBalancerAddress`，待解析生效后再访问。
+1. 若选择了自定义域名，先在您的 DNS 服务商处添加一条 A 记录，将该域名解析到负载均衡的公网 IP（在实例详情页的「资源」列表中找到对应的 SLB 实例，其服务地址即为公网 IP），待解析生效后再访问。
 2. 单击 `Endpoint` 链接直接打开 OCE 控制台（地址已包含 `/console` 路径）；选择 HTTPS 协议时首次打开需确认自签名证书告警。
 3. 使用 `AdminEmail` 与 `AdminPassword` 登录。
-4. 登录后即可进入控制面，开始管理命名空间、Agent 与模型接入。建议尽快修改初始密码。
+4. 登录后即可进入控制面，开始管理命名空间、Agent 与模型接入。
+
+> 控制台管理员密码在部署时生成并写入集群，可在控制台内修改；但网页聊天的登录密码固定取部署时的初始管理员密码，**不会随控制台改密同步**，修改控制台密码前请先保存好 `AdminPassword`。
 
 ## 使用说明
 
@@ -111,21 +112,20 @@ OCE 中的 Agent 需要对接一个大模型服务才能响应请求。登录后
 Agent 发布成功后，无需任何手工网络或认证配置，即可从浏览器与它对话：
 
 1. **打开聊天页**：在 OCE 控制台进入 Agent 详情页，点击工具栏的 **Open Chat** 链接，会在新窗口打开该 Agent 的聊天页（自动跳转到它分配到的聊天端口）；
-2. **输入聊天密码**：首次打开会出现密码输入框。聊天密码保存在集群 Secret（`openclaw-agent-transport-*`）的 `gateway-password` 字段中，在能访问集群的终端执行：
-
-```bash
-# 1) 定位 Agent 的 transport secret（位于 oce- 开头的业务命名空间）
-kubectl get secret -A | grep openclaw-agent-transport
-# 2) 读取聊天密码（替换 <namespace> 与 <secret名> 为上一步结果）
-kubectl -n <namespace> get secret <secret名> -o jsonpath='{.data.gateway-password}' | base64 -d
-```
-
+2. **输入聊天密码**：首次打开会出现密码输入框。聊天密码**与 OCE 控制台管理员密码相同**（即部署输出项 `AdminPassword`），所有 Agent 共用，无需到集群中单独获取；
 3. **自动配对**：提交密码后页面短暂显示「等待批准」，实例内置的自动配对组件会在约 5 秒内自动批准该浏览器，随后直接进入聊天界面；
 4. **开始对话**：输入消息即可获得 Agent 回复（模型与提示词跟随 Agent 配置）。
 
 > - 聊天入口经负载均衡的 **8080-8089 端口段**对外暴露，所有监听在首次部署时由系统（阿里云 CCM）按 Chart 声明自动创建，无需手工配置；**复用已有 ACK 集群**时，请确保集群安全组已放行 8080-8089；
-> - 网页聊天采用 Gateway 密码认证 + 设备配对双重保护，请妥善保管聊天密码；
+> - 网页聊天采用 Gateway 密码认证 + 设备配对双重保护；聊天密码与控制台管理员密码一致，请妥善保管；
+> - 聊天密码取自部署完成时写入的初始管理员密码：之后在控制台修改管理员密码只影响控制台登录，聊天入口仍使用初始密码；
 > - 命令行验证方式仍然可用：`kubectl -n <namespace> exec <gateway pod> -c gateway -- openclaw agent --local -m "你好"`。
+> - **早期版本创建的 Agent**（聊天密码仍为每个 Agent 随机生成的版本）沿用原密码，Secret 已存在时不会被覆盖，删除该 Agent 重新创建即可统一；如需读取旧密码：
+>
+>   ```bash
+>   kubectl get secret -A | grep openclaw-agent-transport
+>   kubectl -n <namespace> get secret <secret名> -o jsonpath='{.data.gateway-password}' | base64 -d
+>   ```
 
 #### 多 Agent 与聊天端口段（8080-8089）
 
@@ -176,7 +176,13 @@ kubectl -n openclaw-enterprise get svc openclaw-enterprise-tls-proxy
 
 ### 控制台能打开但登录失败
 
-登录只接受来自 `Endpoint` 所示地址的请求。请确认浏览器地址栏中的主机名与 `Endpoint` 完全一致：IP 模式使用 IP 访问，自定义域名模式使用该域名访问且域名已解析到 `LoadBalancerAddress`。
+登录只接受来自 `Endpoint` 所示地址的请求。请确认浏览器地址栏中的主机名与 `Endpoint` 完全一致：IP 模式使用 IP 访问，自定义域名模式使用该域名访问且域名已解析到负载均衡的公网 IP。
+
+### 聊天页提示密码错误
+
+- 确认输入的是部署输出项 `AdminPassword`。初始管理员密码写入集群后不再随控制台改密变化，在控制台改过密码时请仍用 `AdminPassword` 登录聊天页。
+- 若该 Agent 创建于聊天密码为随机生成的早期版本，需按上文「与 Agent 对话」中的命令从集群 Secret 读取其密码，或删除该 Agent 重新创建。
+- 密码正确但页面一直停留在「等待批准」，说明实例内的自动配对组件未生效，检查 `openclaw-enterprise-worker` 与聊天端口对应 Agent 的运行状态。
 
 ### 组件处于 Pending / CrashLoopBackOff
 
