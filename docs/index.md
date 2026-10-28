@@ -116,17 +116,10 @@ Agent 发布成功后，无需任何手工网络或认证配置，即可从浏�
 3. **自动配对**：提交密码后页面短暂显示「等待批准」，实例内置的自动配对组件会在约 5 秒内自动批准该浏览器，随后直接进入聊天界面；
 4. **开始对话**：输入消息即可获得 Agent 回复（模型与提示词跟随 Agent 配置）。
 
-> - 本节描述**当前版本**（2026-10-27 之后发布）的行为：聊天密码复用控制台初始管理员密码。若实例部署的是更早版本，聊天密码由系统为每个 Agent 随机生成，需按本节末尾的命令从集群 Secret 读取；
 > - 聊天入口经负载均衡的 **8080-8089 端口段**对外暴露，所有监听在首次部署时由系统（阿里云 CCM）按 Chart 声明自动创建，无需手工配置；**复用已有 ACK 集群**时，请确保集群安全组已放行 8080-8089；
 > - 网页聊天采用 Gateway 密码认证 + 设备配对双重保护；聊天密码与控制台管理员密码一致，请妥善保管；
 > - 聊天密码取自部署完成时写入的初始管理员密码：之后在控制台修改管理员密码只影响控制台登录，聊天入口仍使用初始密码；
 > - 命令行验证方式仍然可用：`kubectl -n <namespace> exec <gateway pod> -c gateway -- openclaw agent --local -m "你好"`。
-> - **早期版本创建的 Agent**（聊天密码仍为每个 Agent 随机生成的版本）沿用原密码，Secret 已存在时不会被覆盖，删除该 Agent 重新创建即可统一；如需读取旧密码：
->
->   ```bash
->   kubectl get secret -A | grep openclaw-agent-transport
->   kubectl -n <namespace> get secret <secret名> -o jsonpath='{.data.gateway-password}' | base64 -d
->   ```
 
 #### 多 Agent 与聊天端口段（8080-8089）
 
@@ -182,7 +175,6 @@ kubectl -n openclaw-enterprise get svc openclaw-enterprise-tls-proxy
 ### 聊天页提示密码错误
 
 - 确认输入的是部署输出项 `AdminPassword`。初始管理员密码写入集群后不再随控制台改密变化，在控制台改过密码时请仍用 `AdminPassword` 登录聊天页。
-- 若该 Agent 创建于聊天密码为随机生成的早期版本，需按上文「与 Agent 对话」中的命令从集群 Secret 读取其密码，或删除该 Agent 重新创建。
 - 密码正确但页面一直停留在「等待批准」，说明实例内的自动配对组件未生效，检查 `openclaw-enterprise-worker` 与聊天端口对应 Agent 的运行状态。
 
 ### 组件处于 Pending / CrashLoopBackOff
